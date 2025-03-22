@@ -1,0 +1,81 @@
+version: "3.7"
+
+services:
+  bitcoind:
+    image: lncm/bitcoind:v27.2
+    volumes:
+      - ./data_dirs/bitcoind:/data/.bitcoin
+    ports:
+      - "127.0.0.1:18443:18443"
+      - "127.0.0.1:18444:18444"
+
+  electrumx:
+    image: bisq/electrumx
+    build: ./electrumx
+    volumes:
+      - ./data_dirs/electrumx:/root/electrumx/db_directory
+      - ./certs:/root/electrumx/certs
+    environment:
+      - ALLOW_ROOT=yes
+      - SERVICES=tcp://:51001,ssl://:51002,wss://:51004,rpc://
+      - COIN=Bitcoin
+      - NET=regtest
+      - DAEMON_URL=http://bitcoin:bisq@bitcoind:18443
+      - DB_DIRECTORY=/root/electrumx/db_directory
+      - SSL_CERTFILE=/root/electrumx/certs/server.crt
+      - SSL_KEYFILE=/root/electrumx/certs/server.key
+    entrypoint: ./electrumx_server
+    ports:
+      - "127.0.0.1:51001:51001"
+      - "127.0.0.1:51002:51002"
+      - "127.0.0.1:51004:51004"
+
+  mempool-web:
+    environment:
+      FRONTEND_HTTP_PORT: "8080"
+      BACKEND_MAINNET_HTTP_HOST: "mempoolapi"
+    image: mempool/frontend:latest
+    user: "1000:1000"
+    restart: on-failure
+    stop_grace_period: 1m
+    command: "./wait-for mempooldb:3306 --timeout=720 -- nginx -g 'daemon off;'"
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  mempoolapi:
+    depends_on:
+      - electrumx
+    environment:
+      MEMPOOL_BACKEND: "electrum"
+      CORE_RPC_HOST: "bitcoind"
+      CORE_RPC_PORT: "18443"
+      CORE_RPC_USERNAME: "bitcoin"
+      CORE_RPC_PASSWORD: "bisq"
+      ELECTRUM_HOST: "electrumx"
+      ELECTRUM_PORT: "51001"
+      ELECTRUM_TLS_ENABLED: "false"
+      DATABASE_ENABLED: "true"
+      DATABASE_HOST: "mempooldb"
+      DATABASE_DATABASE: "mempool"
+      DATABASE_USERNAME: "mempool"
+      DATABASE_PASSWORD: "mempool"
+      STATISTICS_ENABLED: "true"
+    image: mempool/backend:latest
+    user: "1000:1000"
+    restart: on-failure
+    stop_grace_period: 1m
+    command: "./wait-for-it.sh mempooldb:3306 --timeout=720 --strict -- ./start.sh"
+    volumes:
+      - ./data_dirs/mempool-api:/backend/cache
+
+  mempooldb:
+    environment:
+      MYSQL_DATABASE: "mempool"
+      MYSQL_USER: "mempool"
+      MYSQL_PASSWORD: "mempool"
+      MYSQL_ROOT_PASSWORD: "admin"
+    image: mariadb:10.5.8
+    restart: on-failure
+    stop_grace_period: 1m
+    volumes:
+      - ./data_dirs/mempool-mysql:/var/lib/mysql
